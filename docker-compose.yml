@@ -1,0 +1,148 @@
+services:
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - frontend
+      - api
+      - windmill
+    networks:
+      - courier-network
+
+  # React frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost/api
+      - REACT_APP_WS_URL=ws://localhost/ws
+    depends_on:
+      - api
+    networks:
+      - courier-network
+
+  # FastAPI backend
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=duckdb:///data/courier.db
+      - WINDMILL_URL=http://windmill:8000
+      - REDIS_URL=redis://redis:6379
+      - FASTMCP_URL=http://fastmcp:8001
+      - OLLAMA_URL=http://ollama:11434
+    volumes:
+      - duckdb_data:/data
+    depends_on:
+      - duckdb
+      - redis
+      - windmill
+      - ollama
+      - fastmcp
+    networks:
+      - courier-network
+
+  # Windmill workflow orchestration
+  windmill:
+    image: ghcr.io/windmill-labs/windmill:main
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=postgresql://windmill:windmill_password@postgres:5432/windmill
+      - RUST_LOG=info
+      - MODE=server
+      - OLLAMA_URL=http://ollama:11434
+      - FASTMCP_URL=http://fastmcp:8001
+    depends_on:
+      - postgres
+      - ollama
+      - fastmcp
+    networks:
+      - courier-network
+
+  # Ollama local AI server
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    networks:
+      - courier-network
+
+  # FastMCP server for courier services
+  fastmcp:
+    build:
+      context: ./fastmcp
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8001"
+    environment:
+      - DATABASE_URL=duckdb:///data/courier.db
+      - MCP_SERVER_NAME=jfglobalexpress-courier
+    volumes:
+      - duckdb_data:/data
+    depends_on:
+      - duckdb
+    networks:
+      - courier-network
+
+  # DuckDB database (using a lightweight container approach)
+  duckdb:
+    image: alpine:latest
+    command: tail -f /dev/null
+    volumes:
+      - duckdb_data:/data
+    networks:
+      - courier-network
+
+  # Redis for caching and sessions
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - courier-network
+
+  # PostgreSQL for Windmill
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=windmill
+      - POSTGRES_USER=windmill
+      - POSTGRES_PASSWORD=windmill_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - courier-network
+
+volumes:
+  duckdb_data:
+    driver: local
+  ollama_data:
+    driver: local
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  courier-network:
+    driver: bridge
